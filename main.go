@@ -438,7 +438,14 @@ func queryBirthdays(db *sql.DB, query string) ([]TeamMember, error) {
         var birthdays []TeamMember
         for rows.Next() {
                 var member TeamMember
-                err := rows.Scan(&member.ID, &member.Name, &member.Birthday, &member.TeamID, &member.TeamName)
+                err := rows.Scan(
+                        &member.ID,
+                        &member.Name,
+                        &member.Birthday,
+                        &member.TeamID,
+                        &member.TeamName,
+                        &member.PhoneNumber,
+                )
                 if err != nil {
                         return nil, err
                 }
