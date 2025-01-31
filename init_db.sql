@@ -22,6 +22,20 @@ $$;
 -- Устанавливаем схему public по умолчанию
 SET search_path TO public;
 
+-- Предоставляем базовые права на схему
+GRANT USAGE ON SCHEMA public TO birthdaybot;
+GRANT CREATE ON SCHEMA public TO birthdaybot;
+
+-- Устанавливаем права по умолчанию для будущих объектов
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO birthdaybot;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO birthdaybot;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT EXECUTE ON FUNCTIONS TO birthdaybot;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT USAGE ON TYPES TO birthdaybot;
+
 -- Создаем enum тип для actions
 DO $$
 BEGIN
@@ -74,29 +88,20 @@ CREATE TABLE IF NOT EXISTS actions (
     type action_type NOT NULL,
     is_done BOOLEAN DEFAULT false,
     FOREIGN KEY (task_id) REFERENCES year_tasks(id),
-    FOREIGN KEY (team_member_id) REFERENCES team_members(id)
+    FOREIGN KEY (team_member_id) REFERENCES team_members(id),
+    CONSTRAINT check_request_member CHECK (
+        type != 'request' OR 
+        team_member_id NOT IN (
+            SELECT team_member_id FROM year_tasks WHERE id = task_id
+        )
+    )
 );
 
--- Создаем функцию для проверки логики
-CREATE OR REPLACE FUNCTION check_request_member()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.type = 'request' THEN
-        -- Проверяем, чтобы team_member_id не совпадал с исполнителем задачи
-        IF EXISTS (
-            SELECT 1 
-            FROM year_tasks 
-            WHERE id = NEW.task_id AND team_member_id = NEW.team_member_id
-        ) THEN
-            RAISE EXCEPTION 'team_member_id cannot be the same as the task owner for type=request';
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+CREATE TABLE IF NOT EXISTS admins (
+    id SERIAL PRIMARY KEY,
+    telegram_chat_id BIGINT NOT NULL UNIQUE
+);
 
--- Создаем триггер для проверки перед вставкой
-CREATE TRIGGER trigger_check_request_member
-BEFORE INSERT OR UPDATE ON actions
-FOR EACH ROW
-EXECUTE FUNCTION check_request_member();
+-- Предоставляем права на созданные объекты
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO birthdaybot;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO birthdaybot;

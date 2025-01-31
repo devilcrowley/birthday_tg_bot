@@ -62,6 +62,22 @@ type UserState struct {
         PhoneNumber string
 }
 
+func isAdmin(db *sql.DB, chatID int64) bool {
+        var exists bool
+        err := db.QueryRow(`
+                SELECT EXISTS(
+                        SELECT 1 FROM admins 
+                        WHERE telegram_chat_id = $1
+                )`, chatID).Scan(&exists)
+        
+        if err != nil {
+                log.Printf("Error checking admin status: %v", err)
+                return false
+        }
+        
+        return exists
+}
+
 var userStates = make(map[int64]*UserState)
 
 func main() {
@@ -280,6 +296,12 @@ func handleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
                 handleTransferConfirmation(bot, db, callback)
         } else if strings.HasPrefix(callback.Data, "payout_done_") {
                 handlePayoutConfirmation(bot, db, callback)
+        } else if strings.HasPrefix(callback.Data, "admin_") {
+                if !isAdmin(db, callback.Message.Chat.ID) {
+                        bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, "У вас нет прав администратора"))
+                        return
+                }
+                handleAdminAction(bot, db, callback)
         }
 }
 
@@ -1124,6 +1146,218 @@ func sendPayoutReminders(db *sql.DB, bot *tgbotapi.BotAPI) {
                 }
                 rows.Close()
         }
+}
+
+func handleAdminAction(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
+        action := strings.TrimPrefix(callback.Data, "admin_")
+        chatID := callback.Message.Chat.ID
+        var response string
+
+        switch action {
+        case "gen_tasks":
+                // Запускаем генерацию задач
+                tasks, err := generateUpcomingTasks(db)
+                if err != nil {
+                        response = "Ошибка при генерации задач: " + err.Error()
+                } else {
+                        response = fmt.Sprintf("Создано новых задач: %d", tasks)
+                }
+
+        case "gen_actions":
+                // Запускаем генерацию действий
+                actions, err := generateRequestActions(db)
+                if err != nil {
+                        response = "Ошибка при генерации действий: " + err.Error()
+                } else {
+                        response = fmt.Sprintf("Создано новых действий: %d", actions)
+                }
+
+        case "send_members":
+                // Отправляем уведомления участникам
+                count, err := sendMemberNotifications(db, bot)
+                if err != nil {
+                        response = "Ошибка при отправке уведомлений участникам: " + err.Error()
+                } else {
+                        response = fmt.Sprintf("Отправлено уведомлений: %d", count)
+                }
+
+        case "send_teamlead":
+                // Отправляем уведомления тимлидам
+                count, err := sendTeamLeadNotifications(db, bot)
+                if err != nil {
+                        response = "Ошибка при отправке уведомлений тимлидам: " + err.Error()
+                } else {
+                        response = fmt.Sprintf("Отправлено уведомлений: %d", count)
+                }
+
+        case "send_birthday":
+                // Отправляем поздравления именинникам
+                count, err := sendBirthdayWishesNow(db, bot)
+                if err != nil {
+                        response = "Ошибка при отправке поздравлений: " + err.Error()
+                } else {
+                        response = fmt.Sprintf("Отправлено поздравлений: %d", count)
+                }
+
+        case "send_money":
+                // Отправляем напоминания о переводе денег
+                count, err := sendPayoutRemindersNow(db, bot)
+                if err != nil {
+                        response = "Ошибка при отправке напоминаний о переводе: " + err.Error()
+                } else {
+                        response = fmt.Sprintf("Отправлено напоминаний: %d", count)
+                }
+
+        default:
+                response = "Неизвестное действие"
+        }
+
+        // Отправляем ответ
+        msg := tgbotapi.NewMessage(chatID, response)
+        bot.Send(msg)
+}
+
+// Вспомогательные функции для админских действий
+func generateUpcomingTasks(db *sql.DB) (int, error) {
+        result, err := db.Exec(`
+                INSERT INTO year_tasks (year, team_member_id)
+                SELECT 
+                        EXTRACT(YEAR FROM CURRENT_DATE)::integer,
+                        m.id
+                FROM team_members m
+                WHERE (
+                        EXTRACT(MONTH FROM m.birthday),
+                        EXTRACT(DAY FROM m.birthday)
+                ) = (
+                        EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '3 days'),
+                        EXTRACT(DAY FROM CURRENT_DATE + INTERVAL '3 days')
+                )
+                AND NOT EXISTS (
+                        SELECT 1 FROM year_tasks yt
+                        WHERE yt.team_member_id = m.id
+                        AND yt.year = EXTRACT(YEAR FROM CURRENT_DATE)::integer
+                )`)
+        
+        if err != nil {
+                return 0, err
+        }
+
+        count, err := result.RowsAffected()
+        return int(count), err
+}
+
+func generateRequestActions(db *sql.DB) (int, error) {
+        result, err := db.Exec(`
+                INSERT INTO actions (task_id, team_member_id, type)
+                SELECT 
+                        yt.id,
+                        m.id,
+                        'request'
+                FROM year_tasks yt
+                CROSS JOIN team_members m
+                WHERE NOT EXISTS (
+                        SELECT 1 FROM actions a
+                        WHERE a.task_id = yt.id
+                        AND a.team_member_id = m.id
+                )
+                AND m.id != yt.team_member_id`)
+
+        if err != nil {
+                return 0, err
+        }
+
+        count, err := result.RowsAffected()
+        return int(count), err
+}
+
+func sendBirthdayWishesNow(db *sql.DB, bot *tgbotapi.BotAPI) (int, error) {
+        var count int
+        rows, err := db.Query(`
+                SELECT 
+                        m.telegram_chat_id
+                FROM team_members m
+                WHERE EXTRACT(MONTH FROM m.birthday) = EXTRACT(MONTH FROM CURRENT_DATE)
+                AND EXTRACT(DAY FROM m.birthday) = EXTRACT(DAY FROM CURRENT_DATE)`)
+        
+        if err != nil {
+                return 0, err
+        }
+        defer rows.Close()
+
+        for rows.Next() {
+                var chatID int64
+                if err := rows.Scan(&chatID); err != nil {
+                        return count, err
+                }
+
+                msg := tgbotapi.NewMessage(chatID,
+                        "Привет! Сегодня твой день рождения и, от имени всей команды, "+
+                                "я поздравляю тебя с этим замечательным праздником! "+
+                                "Пусть тебе сопутствуют успех, удача и здоровье!")
+                
+                if _, err := bot.Send(msg); err != nil {
+                        return count, err
+                }
+                count++
+        }
+
+        return count, nil
+}
+
+func sendPayoutRemindersNow(db *sql.DB, bot *tgbotapi.BotAPI) (int, error) {
+        var count int
+        rows, err := db.Query(`
+                SELECT 
+                        a.id as action_id,
+                        tl.telegram_chat_id as teamlead_chat_id,
+                        bm.name as birthday_person_name,
+                        bm.phone_number as birthday_person_phone,
+                        yt.id as task_id
+                FROM actions a
+                JOIN year_tasks yt ON a.task_id = yt.id
+                JOIN team_members bm ON yt.team_member_id = bm.id
+                JOIN team_members tl ON a.team_member_id = tl.id
+                WHERE a.type = 'payout' 
+                AND a.is_done = false
+                AND yt.is_money_transfered = false`)
+
+        if err != nil {
+                return 0, err
+        }
+        defer rows.Close()
+
+        for rows.Next() {
+                var (
+                        actionID           int
+                        teamleadChatID     int64
+                        birthdayPersonName string
+                        birthdayPersonPhone string
+                        taskID             int
+                )
+
+                if err := rows.Scan(&actionID, &teamleadChatID, &birthdayPersonName, &birthdayPersonPhone, &taskID); err != nil {
+                        return count, err
+                }
+
+                keyboard := tgbotapi.NewInlineKeyboardMarkup(
+                        tgbotapi.NewInlineKeyboardRow(
+                                tgbotapi.NewInlineKeyboardButtonData("Готово, перевел", fmt.Sprintf("payout_done_%d_%d", actionID, taskID)),
+                        ),
+                )
+
+                msg := tgbotapi.NewMessage(teamleadChatID,
+                        fmt.Sprintf("Привет! Нужно перевести подарок имениннику! "+
+                                "Получатель %s, номер телефона %s",
+                                birthdayPersonName, birthdayPersonPhone))
+                msg.ReplyMarkup = keyboard
+
+                if _, err := bot.Send(msg); err != nil {
+                        return count, err
+                }
+                count++
+        }
+
+        return count, nil
 }
 
 func formatTeamLeadsMessage(teamLeads []TeamLead) string {
