@@ -160,13 +160,10 @@ func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, message *tgbotapi.Message) 
                         // Проверяем, является ли пользователь тимлидом
                         var isTeamLead bool
                         err := db.QueryRow(`
-                                SELECT EXISTS(
-                                        SELECT 1 FROM teamleads 
-                                        WHERE team_member_id IN (
-                                                SELECT id FROM team_members 
-                                                WHERE name = $1
-                                        )
-                                )`, message.From.UserName).Scan(&isTeamLead)
+                                SELECT 1 FROM teamleads tl
++                                        JOIN team_members tm ON tl.team_member_id = tm.id
++                                        WHERE tm.telegram_chat_id = $1
++                                )`, message.Chat.ID).Scan(&isTeamLead)
                         if err != nil {
                                 log.Printf("Error checking team lead status: %v", err)
                                 return
