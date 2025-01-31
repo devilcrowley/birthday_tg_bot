@@ -414,9 +414,9 @@ func getUpcomingBirthdays(db *sql.DB) ([]TeamMember, error) {
                         m.id, 
                         m.name, 
                         m.birthday, 
-                        m.team_id, 
-                        m.phone_number,
-                        t.name as team_name
+                        m.team_id,
+                        t.name as team_name,
+                        m.phone_number
                 FROM team_members m
                 JOIN teams t ON m.team_id = t.id
                 JOIN birthday_dates bd ON m.id = bd.id
