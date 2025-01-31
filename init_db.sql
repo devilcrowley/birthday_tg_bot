@@ -88,14 +88,31 @@ CREATE TABLE IF NOT EXISTS actions (
     type action_type NOT NULL,
     is_done BOOLEAN DEFAULT false,
     FOREIGN KEY (task_id) REFERENCES year_tasks(id),
-    FOREIGN KEY (team_member_id) REFERENCES team_members(id),
-    CONSTRAINT check_request_member CHECK (
-        type != 'request' OR 
-        team_member_id NOT IN (
-            SELECT team_member_id FROM year_tasks WHERE id = task_id
-        )
-    )
+    FOREIGN KEY (team_member_id) REFERENCES team_members(id)
 );
+
+
+CREATE OR REPLACE FUNCTION check_request_member()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.type = 'request' THEN
+        -- Проверяем, чтобы team_member_id не совпадал с исполнителем задачи
+        IF EXISTS (
+            SELECT 1 
+            FROM year_tasks 
+            WHERE id = NEW.task_id AND team_member_id = NEW.team_member_id
+        ) THEN
+            RAISE EXCEPTION 'team_member_id cannot be the same as the task owner for type=request';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_check_request_member
+BEFORE INSERT OR UPDATE ON actions
+FOR EACH ROW
+EXECUTE FUNCTION check_request_member();
 
 CREATE TABLE IF NOT EXISTS admins (
     id SERIAL PRIMARY KEY,
