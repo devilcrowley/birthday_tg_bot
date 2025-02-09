@@ -424,20 +424,25 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
         }()
     case "admin_send_teamlead_money_message":
         go func() {
+            log.Printf("Starting to check pending payout reminders")
             count, err := checkPendingPayoutRemindersCount(db)
             if err != nil {
+                log.Printf("Error checking pending payout reminders: %v", err)
                 msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке ожидающих напоминаний о переводе денег.")
                 bot.Send(msg)
                 return
             }
+            log.Printf("Found %d pending payout reminders", count)
             if count == 0 {
                 msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых напоминаний о переводе денег для отправки.")
                 bot.Send(msg)
                 return
             }
+            log.Printf("Starting to send payout reminders")
             sendPayoutReminders(db, bot)
             msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Напоминания о переводе денег успешно отправлены %d тимлидам.", count))
             bot.Send(msg)
+            log.Printf("Finished sending payout reminders")
         }()
     }
 }
@@ -532,18 +537,21 @@ func checkTodayBirthdaysCount(db *sql.DB) (int, error) {
 func checkPendingPayoutRemindersCount(db *sql.DB) (int, error) {
     var count int
     query := `
-        SELECT COUNT(*)
+        SELECT COUNT(DISTINCT yt.id)
         FROM year_tasks yt
+        JOIN actions a ON a.task_id = yt.id
         WHERE yt.is_money_transfered = false
-        AND EXISTS (
-            SELECT 1 FROM actions a
-            WHERE a.task_id = yt.id
-            AND a.type = 'payout'
-            AND a.is_done = false
-        )`
+        AND a.type = 'payout'
+        AND a.is_done = false
+        AND yt.is_teamlead_notified = true`
 
     err := db.QueryRow(query).Scan(&count)
-    return count, err
+    if err != nil {
+        log.Printf("Error in checkPendingPayoutRemindersCount: %v", err)
+        return 0, err
+    }
+    log.Printf("Found %d pending payout reminders", count)
+    return count, nil
 }
 
 func handleTeamSelection(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
