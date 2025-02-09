@@ -127,160 +127,237 @@ func main() {
 }
 
 func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, message *tgbotapi.Message) {
-        userID := message.From.ID
-        chatID := message.Chat.ID
+    userID := message.From.ID
+    chatID := message.Chat.ID
 
-        if message.IsCommand() {
-                switch message.Command() {
-                case "start":
-                        // Начинаем процесс регистрации
-                        userStates[userID] = &UserState{Stage: "awaiting_name"}
-                        msg := tgbotapi.NewMessage(chatID, "Привет! Давайте добавим ваш день рождения в базу данных. Как вас зовут?")
-                        bot.Send(msg)
-                        return
-                case "help":
-                        msg := tgbotapi.NewMessage(chatID, `Доступные команды:
+    if message.IsCommand() {
+        switch message.Command() {
+        case "start":
+            // Начинаем процесс регистрации
+            userStates[userID] = &UserState{Stage: "awaiting_name"}
+            msg := tgbotapi.NewMessage(chatID, "Привет! Давайте добавим ваш день рождения в базу данных. Как вас зовут?")
+            bot.Send(msg)
+            return
+        case "help":
+            msg := tgbotapi.NewMessage(chatID, `Доступные команды:
 /start - начать процесс регистрации
 /birthdays - показать ближайшие дни рождения (только для тимлидов)
 /help - показать это сообщение`)
-                        bot.Send(msg)
-                        return
-                case "teamleads":
-                        teamLeads, err := getTeamLeads(db)
-                        if err != nil {
-                                log.Printf("Error getting team leads: %v", err)
-                                msg := tgbotapi.NewMessage(chatID, "Произошла ошибка при получении списка тимлидов")
-                                bot.Send(msg)
-                                return
-                        }
-                        msg := tgbotapi.NewMessage(chatID, formatTeamLeadsMessage(teamLeads))
-                        bot.Send(msg)
-                        return
-                case "birthdays":
-                        // Проверяем, является ли пользователь тимлидом
-                        var isTeamLead bool
-                        err := db.QueryRow(`
-                                SELECT EXISTS(
-                                        SELECT 1 FROM teamleads tl
-                                        JOIN team_members tm ON tl.team_member_id = tm.id
-                                        WHERE tm.telegram_chat_id = $1::bigint
-                                )`, message.Chat.ID).Scan(&isTeamLead)
-                        if err != nil {
-                                log.Printf("Error checking team lead status: %v", err)
-                                return
-                        }
-                        if !isTeamLead {
-                                msg := tgbotapi.NewMessage(chatID, "Эта команда доступна только для тимлидов.")
-                                bot.Send(msg)
-                                return
-                        }
-
-                        birthdays, err := getUpcomingBirthdays(db)
-                        if err != nil {
-                                log.Printf("Error getting birthdays: %v", err)
-                                return
-                        }
-                        msg := tgbotapi.NewMessage(chatID, formatBirthdayMessage(birthdays))
-                        bot.Send(msg)
-                        return
-                }
-        }
-
-        // Обработка состояний пользователя
-        state, exists := userStates[userID]
-        if !exists {
-                msg := tgbotapi.NewMessage(chatID, "Используйте /start для начала процесса регистрации.")
+            bot.Send(msg)
+            return
+        case "teamleads":
+            teamLeads, err := getTeamLeads(db)
+            if err != nil {
+                log.Printf("Error getting team leads: %v", err)
+                msg := tgbotapi.NewMessage(chatID, "Произошла ошибка при получении списка тимлидов")
                 bot.Send(msg)
                 return
-        }
-
-        switch state.Stage {
-        case "awaiting_name":
-                state.Name = message.Text
-                state.Stage = "awaiting_birthday"
-                msg := tgbotapi.NewMessage(chatID, "Отлично! Теперь введите вашу дату рождения в формате DD.MM.YYYY")
-                bot.Send(msg)
-
-        case "awaiting_birthday":
-                birthday, err := time.Parse("02.01.2006", message.Text)
-                if err != nil {
-                        msg := tgbotapi.NewMessage(chatID, "Неверный формат даты. Пожалуйста, используйте формат DD.MM.YYYY")
-                        bot.Send(msg)
-                        return
-                }
-
-                state.Birthday = birthday
-                state.Stage = "awaiting_phone"
-
-                // Создаем кнопку для запроса номера телефона
-                keyboard := tgbotapi.NewReplyKeyboard(
-                        tgbotapi.NewKeyboardButtonRow(
-                                tgbotapi.NewKeyboardButtonContact("📱 Поделиться номером телефона"),
-                        ),
-                )
-                keyboard.OneTimeKeyboard = true // Клавиатура исчезнет после использования
-
-                msg := tgbotapi.NewMessage(chatID, "Отлично! Пожалуйста, нажмите на кнопку ниже, чтобы поделиться своим номером телефона")
-                msg.ReplyMarkup = keyboard
+            }
+            msg := tgbotapi.NewMessage(chatID, formatTeamLeadsMessage(teamLeads))
+            bot.Send(msg)
+            return
+        case "birthdays":
+            // Проверяем, является ли пользователь тимлидом
+            var isTeamLead bool
+            err := db.QueryRow(`
+                SELECT EXISTS(
+                    SELECT 1 FROM teamleads tl
+                    JOIN team_members tm ON tl.team_member_id = tm.id
+                    WHERE tm.telegram_chat_id = $1::bigint
+                )`, message.Chat.ID).Scan(&isTeamLead)
+            if err != nil {
+                log.Printf("Error checking team lead status: %v", err)
+                return
+            }
+            if !isTeamLead {
+                msg := tgbotapi.NewMessage(chatID, "Эта команда доступна только для тимлидов.")
                 bot.Send(msg)
                 return
+            }
 
-        case "awaiting_phone":
-                var msg tgbotapi.MessageConfig
-                var err error
-                var teams []Team
-
-                // Проверяем, что пользователь отправил контакт, а не текстовое сообщение
-                if message.Contact == nil {
-                        msg = tgbotapi.NewMessage(chatID, "Пожалуйста, используйте кнопку 'Поделиться номером телефона' для отправки вашего номера")
-                        bot.Send(msg)
-                        return
-                }
-
-                // Проверяем, что контакт принадлежит пользователю
-                if message.Contact.UserID != message.From.ID {
-                        msg = tgbotapi.NewMessage(chatID, "Пожалуйста, поделитесь своим собственным номером телефона")
-                        bot.Send(msg)
-                        return
-                }
-
-                state.PhoneNumber = message.Contact.PhoneNumber
-                state.Stage = "awaiting_team"
-
-                // Убираем клавиатуру после получения номера
-                msg = tgbotapi.NewMessage(chatID, "Спасибо! Теперь выберите вашу команду")
-                msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+            birthdays, err := getUpcomingBirthdays(db)
+            if err != nil {
+                log.Printf("Error getting birthdays: %v", err)
+                return
+            }
+            msg := tgbotapi.NewMessage(chatID, formatBirthdayMessage(birthdays))
+            bot.Send(msg)
+            return
+        case "admin":
+            // Проверяем, является ли пользователь администратором
+            isAdmin, err := isAdmin(db, chatID)
+            if err != nil {
+                log.Printf("Error checking admin status: %v", err)
+                return
+            }
+            if !isAdmin {
+                msg := tgbotapi.NewMessage(chatID, "Эта команда доступна только для администраторов.")
                 bot.Send(msg)
+                return
+            }
 
-                // Получаем список команд и создаем inline-кнопки
-                teams, err = getActiveTeams(db)
-                if err != nil {
-                        log.Printf("Error getting teams: %v", err)
-                        msg = tgbotapi.NewMessage(chatID, "Произошла ошибка при получении списка команд")
-                        bot.Send(msg)
-                        return
-                }
+            // Создаем inline-кнопки для панели управления
+            keyboard := tgbotapi.NewInlineKeyboardMarkup(
+                tgbotapi.NewInlineKeyboardRow(
+                    tgbotapi.NewInlineKeyboardButtonData("Gen tasks", "admin_gen_tasks"),
+                    tgbotapi.NewInlineKeyboardButtonData("Gen actions", "admin_gen_actions"),
+                ),
+                tgbotapi.NewInlineKeyboardRow(
+                    tgbotapi.NewInlineKeyboardButtonData("Send members messages", "admin_send_members_messages"),
+                    tgbotapi.NewInlineKeyboardButtonData("Send teamlead notify", "admin_send_teamlead_notify"),
+                ),
+                tgbotapi.NewInlineKeyboardRow(
+                    tgbotapi.NewInlineKeyboardButtonData("Send today birthday messages", "admin_send_today_birthday_messages"),
+                    tgbotapi.NewInlineKeyboardButtonData("Send teamlead money message", "admin_send_teamlead_money_message"),
+                ),
+            )
 
-                msg = tgbotapi.NewMessage(chatID, "Выберите вашу команду:")
-                var buttons [][]tgbotapi.InlineKeyboardButton
-                for _, team := range teams {
-                        button := tgbotapi.NewInlineKeyboardButtonData(team.Name, fmt.Sprintf("team_%d", team.ID))
-                        buttons = append(buttons, []tgbotapi.InlineKeyboardButton{button})
-                }
-                msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
-                bot.Send(msg)
+            msg := tgbotapi.NewMessage(chatID, "Панель управления администратора:")
+            msg.ReplyMarkup = keyboard
+            bot.Send(msg)
+            return
         }
+    }
+
+    // Обработка состояний пользователя
+    state, exists := userStates[userID]
+    if !exists {
+        msg := tgbotapi.NewMessage(chatID, "Используйте /start для начала процесса регистрации.")
+        bot.Send(msg)
+        return
+    }
+
+    switch state.Stage {
+    case "awaiting_name":
+        state.Name = message.Text
+        state.Stage = "awaiting_birthday"
+        msg := tgbotapi.NewMessage(chatID, "Отлично! Теперь введите вашу дату рождения в формате DD.MM.YYYY")
+        bot.Send(msg)
+
+    case "awaiting_birthday":
+        birthday, err := time.Parse("02.01.2006", message.Text)
+        if err != nil {
+            msg := tgbotapi.NewMessage(chatID, "Неверный формат даты. Пожалуйста, используйте формат DD.MM.YYYY")
+            bot.Send(msg)
+            return
+        }
+
+        state.Birthday = birthday
+        state.Stage = "awaiting_phone"
+
+        // Создаем кнопку для запроса номера телефона
+        keyboard := tgbotapi.NewReplyKeyboard(
+            tgbotapi.NewKeyboardButtonRow(
+                tgbotapi.NewKeyboardButtonContact("📱 Поделиться номером телефона"),
+            ),
+        )
+        keyboard.OneTimeKeyboard = true // Клавиатура исчезнет после использования
+
+        msg := tgbotapi.NewMessage(chatID, "Отлично! Пожалуйста, нажмите на кнопку ниже, чтобы поделиться своим номером телефона")
+        msg.ReplyMarkup = keyboard
+        bot.Send(msg)
+        return
+
+    case "awaiting_phone":
+        var msg tgbotapi.MessageConfig
+        var err error
+        var teams []Team
+
+        // Проверяем, что пользователь отправил контакт, а не текстовое сообщение
+        if message.Contact == nil {
+            msg = tgbotapi.NewMessage(chatID, "Пожалуйста, используйте кнопку 'Поделиться номером телефона' для отправки вашего номера")
+            bot.Send(msg)
+            return
+        }
+
+        // Проверяем, что контакт принадлежит пользователю
+        if message.Contact.UserID != message.From.ID {
+            msg = tgbotapi.NewMessage(chatID, "Пожалуйста, поделитесь своим собственным номером телефона")
+            bot.Send(msg)
+            return
+        }
+
+        state.PhoneNumber = message.Contact.PhoneNumber
+        state.Stage = "awaiting_team"
+
+        // Убираем клавиатуру после получения номера
+        msg = tgbotapi.NewMessage(chatID, "Спасибо! Теперь выберите вашу команду")
+        msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+        bot.Send(msg)
+
+        // Получаем список команд и создаем inline-кнопки
+        teams, err = getActiveTeams(db)
+        if err != nil {
+            log.Printf("Error getting teams: %v", err)
+            msg = tgbotapi.NewMessage(chatID, "Произошла ошибка при получении списка команд")
+            bot.Send(msg)
+            return
+        }
+
+        msg = tgbotapi.NewMessage(chatID, "Выберите вашу команду:")
+        var buttons [][]tgbotapi.InlineKeyboardButton
+        for _, team := range teams {
+            button := tgbotapi.NewInlineKeyboardButtonData(team.Name, fmt.Sprintf("team_%d", team.ID))
+            buttons = append(buttons, []tgbotapi.InlineKeyboardButton{button})
+        }
+        msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
+        bot.Send(msg)
+    }
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
-        // Проверяем тип callback
-        if strings.HasPrefix(callback.Data, "team_") {
-                handleTeamSelection(bot, db, callback)
-        } else if strings.HasPrefix(callback.Data, "transfer_done_") {
-                handleTransferConfirmation(bot, db, callback)
-        } else if strings.HasPrefix(callback.Data, "payout_done_") {
-                handlePayoutConfirmation(bot, db, callback)
-        }
+    // Проверяем тип callback
+    if strings.HasPrefix(callback.Data, "team_") {
+        handleTeamSelection(bot, db, callback)
+    } else if strings.HasPrefix(callback.Data, "transfer_done_") {
+        handleTransferConfirmation(bot, db, callback)
+    } else if strings.HasPrefix(callback.Data, "payout_done_") {
+        handlePayoutConfirmation(bot, db, callback)
+    } else if strings.HasPrefix(callback.Data, "admin_") {
+        handleAdminCallback(bot, db, callback)
+    }
+}
+
+func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
+    // Проверяем, является ли пользователь администратором
+    isAdmin, err := isAdmin(db, callback.Message.Chat.ID)
+    if err != nil {
+        log.Printf("Error checking admin status: %v", err)
+        return
+    }
+    if !isAdmin {
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Эта команда доступна только для администраторов.")
+        bot.Send(msg)
+        return
+    }
+
+    // Обрабатываем callback в зависимости от типа действия
+    switch callback.Data {
+    case "admin_gen_tasks":
+        checkUpcomingBirthdays(db)
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Задачи успешно созданы.")
+        bot.Send(msg)
+    case "admin_gen_actions":
+        createRequestActions(db)
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Действия успешно созданы.")
+        bot.Send(msg)
+    case "admin_send_members_messages":
+        sendMemberNotifications(db, bot)
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления участникам успешно отправлены.")
+        bot.Send(msg)
+    case "admin_send_teamlead_notify":
+        sendTeamLeadNotifications(db, bot)
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления тимлидам успешно отправлены.")
+        bot.Send(msg)
+    case "admin_send_today_birthday_messages":
+        sendBirthdayWishes(db, bot)
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Поздравления с днем рождения успешно отправлены.")
+        bot.Send(msg)
+    case "admin_send_teamlead_money_message":
+        sendPayoutReminders(db, bot)
+        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Напоминания о переводе денег успешно отправлены.")
+        bot.Send(msg)
+    }
 }
 
 func handleTeamSelection(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
@@ -1278,4 +1355,13 @@ func getActionsByMember(db *sql.DB, teamMemberID int) ([]Action, error) {
                 actions = append(actions, action)
         }
         return actions, nil
+}
+
+func isAdmin(db *sql.DB, chatID int64) (bool, error) {
+    var exists bool
+    err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM admins WHERE telegram_chat_id = $1)", chatID).Scan(&exists)
+    if err != nil {
+        return false, err
+    }
+    return exists, nil
 }
