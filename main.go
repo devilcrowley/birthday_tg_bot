@@ -127,6 +127,96 @@ func main() {
         }
 }
 
+// Вспомогательная функция для записи в журнал
+func logMessageToJournal(db *sql.DB, messageData map[string]interface{}, actionID sql.NullInt64) error {
+    jsonBytes, err := json.Marshal(messageData)
+    if err != nil {
+        return fmt.Errorf("error marshaling message to JSON: %v", err)
+    }
+
+    query := `
+        INSERT INTO api_messages_journal (message, action_id)
+        VALUES ($1::jsonb, $2)`
+
+    _, err = db.Exec(query, string(jsonBytes), actionID)
+    if err != nil {
+        return fmt.Errorf("error inserting into journal: %v", err)
+    }
+
+    return nil
+}
+
+// Функция создания записи в журнале для уведомления участника
+func createMemberNotificationJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string, keyboard interface{}, 
+    birthdayName, teamName, teamleadName, teamleadPhone string, actionID int) error {
+    messageJSON := map[string]interface{}{
+        "message_id": sentMessage.MessageID,
+        "chat_id": sentMessage.Chat.ID,
+        "text": messageText,
+        "keyboard": keyboard,
+        "type": "member_notification",
+        "birthday_person": map[string]interface{}{
+            "name": birthdayName,
+            "team": teamName,
+        },
+        "teamlead": map[string]interface{}{
+            "name": teamleadName,
+            "phone": teamleadPhone,
+        },
+    }
+    return logMessageToJournal(db, messageJSON, sql.NullInt64{Int64: int64(actionID), Valid: true})
+}
+
+// Функция создания записи в журнале для уведомления тимлида
+func createTeamLeadNotificationJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string,
+    birthdayName string, taskID int) error {
+    messageJSON := map[string]interface{}{
+        "message_id": sentMessage.MessageID,
+        "chat_id": sentMessage.Chat.ID,
+        "text": messageText,
+        "type": "teamlead_notification",
+        "birthday_person": map[string]interface{}{
+            "name": birthdayName,
+        },
+        "task_id": taskID,
+    }
+    return logMessageToJournal(db, messageJSON, sql.NullInt64{Valid: false})
+}
+
+// Функция создания записи в журнале для поздравления с днем рождения
+func createBirthdayWishJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string,
+    memberID int, name string, teamID int) error {
+    messageJSON := map[string]interface{}{
+        "message_id": sentMessage.MessageID,
+        "chat_id": sentMessage.Chat.ID,
+        "text": messageText,
+        "type": "birthday_wish",
+        "birthday_person": map[string]interface{}{
+            "id": memberID,
+            "name": name,
+            "team_id": teamID,
+        },
+    }
+    return logMessageToJournal(db, messageJSON, sql.NullInt64{Valid: false})
+}
+
+// Функция создания записи в журнале для напоминания о переводе денег
+func createPayoutReminderJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string, keyboard interface{},
+    birthdayPersonName, birthdayPersonPhone string, actionID int) error {
+    messageJSON := map[string]interface{}{
+        "message_id": sentMessage.MessageID,
+        "chat_id": sentMessage.Chat.ID,
+        "text": messageText,
+        "keyboard": keyboard,
+        "type": "payout_reminder",
+        "birthday_person": map[string]interface{}{
+            "name": birthdayPersonName,
+            "phone": birthdayPersonPhone,
+        },
+    }
+    return logMessageToJournal(db, messageJSON, sql.NullInt64{Int64: int64(actionID), Valid: true})
+}
+
 func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, message *tgbotapi.Message) {
     userID := message.From.ID
     chatID := message.Chat.ID
@@ -721,25 +811,9 @@ func sendPayoutRemindersOnce(db *sql.DB, bot *tgbotapi.BotAPI) error {
             log.Printf("Error sending payout reminder to teamlead %d: %v", teamleadChatID, err)
             continue
         }
-
-        // Создаем JSON для записи в журнал
-        messageJSON := map[string]interface{}{
-            "message_id": sentMessage.MessageID,
-            "chat_id": teamleadChatID,
-            "text": messageText,
-            "keyboard": keyboard,
-            "type": "payout_reminder",
-        }
-
-        // Записываем сообщение в журнал
-        query := `
-            INSERT INTO api_messages_journal (message, action_id)
-            VALUES ($1, $2)`
         
-        _, err = db.Exec(query, messageJSON, actionID)
-        if err != nil {
+        if err := createPayoutReminderJournal(db, sentMessage, messageText, keyboard, birthdayPersonName, birthdayPersonPhone, actionID); err != nil {
             log.Printf("Error logging message to journal: %v", err)
-            // Продолжаем работу, даже если не удалось записать в журнал
         }
     }
 
@@ -1526,32 +1600,8 @@ func sendMemberNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
                         continue
                 }
 
-                // Создаем JSON для записи в журнал
-                messageJSON := map[string]interface{}{
-                    "message_id": sentMessage.MessageID,
-                    "chat_id": telegramChatID,
-                    "text": messageText,
-                    "keyboard": keyboard,
-                    "type": "member_notification",
-                    "birthday_person": map[string]interface{}{
-                        "name": birthdayName,
-                        "team": teamName,
-                    },
-                    "teamlead": map[string]interface{}{
-                        "name": teamleadName,
-                        "phone": teamleadPhone,
-                    },
-                }
-
-                // Записываем сообщение в журнал
-                journalQuery := `
-                    INSERT INTO api_messages_journal (message, action_id)
-                    VALUES ($1, $2)`
-                
-                _, err = db.Exec(journalQuery, messageJSON, actionID)
-                if err != nil {
+                if err := createMemberNotificationJournal(db, sentMessage, messageText, keyboard, birthdayName, teamName, teamleadName, teamleadPhone, actionID); err != nil {
                     log.Printf("Error logging message to journal: %v", err)
-                    // Продолжаем работу, даже если не удалось записать в журнал
                 }
         }
 
@@ -1610,27 +1660,8 @@ func sendTeamLeadNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
                         continue
                 }
 
-                // Создаем JSON для записи в журнал
-                messageJSON := map[string]interface{}{
-                    "message_id": sentMessage.MessageID,
-                    "chat_id": telegramChatID,
-                    "text": messageText,
-                    "type": "teamlead_notification",
-                    "birthday_person": map[string]interface{}{
-                        "name": birthdayName,
-                    },
-                    "task_id": taskID,
-                }
-
-                // Записываем сообщение в журнал
-                journalQuery := `
-                    INSERT INTO api_messages_journal (message, action_id)
-                    VALUES ($1, NULL)`
-                
-                _, err = db.Exec(journalQuery, messageJSON)
-                if err != nil {
+                if err := createTeamLeadNotificationJournal(db, sentMessage, messageText, birthdayName, taskID); err != nil {
                     log.Printf("Error logging message to journal: %v", err)
-                    // Продолжаем работу, даже если не удалось записать в журнал
                 }
 
                 // Обновляем статус уведомления для этой задачи
@@ -1696,28 +1727,8 @@ func sendBirthdayWishesOnce(db *sql.DB, bot *tgbotapi.BotAPI) error {
             continue
         }
 
-        // Создаем JSON для записи в журнал
-        messageJSON := map[string]interface{}{
-            "message_id": sentMessage.MessageID,
-            "chat_id": telegramChatID,
-            "text": messageText,
-            "type": "birthday_wish",
-            "birthday_person": map[string]interface{}{
-                "id": memberID,
-                "name": name,
-                "team_id": teamID,
-            },
-        }
-
-        // Записываем сообщение в журнал
-        journalQuery := `
-            INSERT INTO api_messages_journal (message, action_id)
-            VALUES ($1, NULL)`
-        
-        _, err = db.Exec(journalQuery, messageJSON)
-        if err != nil {
+        if err := createBirthdayWishJournal(db, sentMessage, messageText, memberID, name, teamID); err != nil {
             log.Printf("Error logging message to journal: %v", err)
-            // Продолжаем работу, даже если не удалось записать в журнал
         }
     }
 
