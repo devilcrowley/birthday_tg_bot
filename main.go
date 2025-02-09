@@ -331,32 +331,48 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
         return
     }
 
+    // Отправляем начальное сообщение о начале обработки
+    msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Начинаем обработку запроса...")
+    bot.Send(msg)
+
     // Обрабатываем callback в зависимости от типа действия
     switch callback.Data {
     case "admin_gen_tasks":
-        checkUpcomingBirthdays(db)
-        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Задачи успешно созданы.")
-        bot.Send(msg)
+        go func() {
+            checkUpcomingBirthdays(db)
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Задачи успешно созданы.")
+            bot.Send(msg)
+        }()
     case "admin_gen_actions":
-        createRequestActions(db)
-        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Действия успешно созданы.")
-        bot.Send(msg)
+        go func() {
+            createRequestActions(db)
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Действия успешно созданы.")
+            bot.Send(msg)
+        }()
     case "admin_send_members_messages":
-        sendMemberNotifications(db, bot)
-        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления участникам успешно отправлены.")
-        bot.Send(msg)
+        go func() {
+            sendMemberNotifications(db, bot)
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления участникам успешно отправлены.")
+            bot.Send(msg)
+        }()
     case "admin_send_teamlead_notify":
-        sendTeamLeadNotifications(db, bot)
-        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления тимлидам успешно отправлены.")
-        bot.Send(msg)
+        go func() {
+            sendTeamLeadNotifications(db, bot)
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления тимлидам успешно отправлены.")
+            bot.Send(msg)
+        }()
     case "admin_send_today_birthday_messages":
-        sendBirthdayWishes(db, bot)
-        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Поздравления с днем рождения успешно отправлены.")
-        bot.Send(msg)
+        go func() {
+            sendBirthdayWishes(db, bot)
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Поздравления с днем рождения успешно отправлены.")
+            bot.Send(msg)
+        }()
     case "admin_send_teamlead_money_message":
-        sendPayoutReminders(db, bot)
-        msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Напоминания о переводе денег успешно отправлены.")
-        bot.Send(msg)
+        go func() {
+            sendPayoutReminders(db, bot)
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Напоминания о переводе денег успешно отправлены.")
+            bot.Send(msg)
+        }()
     }
 }
 
