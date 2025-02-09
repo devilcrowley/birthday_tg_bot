@@ -366,20 +366,36 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
     switch callback.Data {
     case "admin_gen_tasks":
         go func() {
+            log.Printf("Starting to check upcoming birthdays")
             count, err := checkUpcomingBirthdaysCount(db)
             if err != nil {
+                log.Printf("Error checking upcoming birthdays count: %v", err)
                 msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке предстоящих дней рождения.")
                 bot.Send(msg)
                 return
             }
+            log.Printf("Found %d upcoming birthdays without tasks", count)
             if count == 0 {
                 msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых дней рождения для создания задач.")
                 bot.Send(msg)
                 return
             }
-            checkUpcomingBirthdays(db)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Задачи успешно созданы для %d предстоящих дней рождения.", count))
+            log.Printf("Starting to create birthday tasks")
+            tasksCreated, err := checkUpcomingBirthdaysOnce(db)
+            if err != nil {
+                if err.Error() == "no new tasks created" {
+                    msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых дней рождения для создания задач.")
+                    bot.Send(msg)
+                } else {
+                    log.Printf("Error creating birthday tasks: %v", err)
+                    msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при создании задач.")
+                    bot.Send(msg)
+                }
+                return
+            }
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Задачи успешно созданы для %d предстоящих дней рождения.", tasksCreated))
             bot.Send(msg)
+            log.Printf("Finished creating birthday tasks")
         }()
     case "admin_gen_actions":
         go func() {
@@ -740,64 +756,88 @@ func handleTeamSelection(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
         delete(userStates, userID)
 }
 
-func checkUpcomingBirthdays(db *sql.DB) {
-        for {
-                // Ждем до 00:01 по московскому времени
-                now := time.Now()
-                next := time.Date(now.Year(), now.Month(), now.Day(), 0, 1, 0, 0, time.Local)
-                if now.After(next) {
-                        next = next.Add(24 * time.Hour)
-                }
-                time.Sleep(time.Until(next))
+func checkUpcomingBirthdaysOnce(db *sql.DB) (int, error) {
+    // Проверяем дни рождения через 3 дня
+    query := `
+        WITH birthday_dates AS (
+            SELECT
+                id,
+                birthday,
+                (CASE
+                    WHEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year')) < CURRENT_DATE
+                    THEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday) + 1)::integer * INTERVAL '1 year'))
+                    ELSE (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year'))
+                END) as next_birthday
+            FROM team_members
+        )
+        SELECT
+            m.id
+        FROM team_members m
+        JOIN birthday_dates bd ON m.id = bd.id
+        LEFT JOIN year_tasks yt ON
+            yt.team_member_id = m.id AND
+            yt.year = EXTRACT(YEAR FROM bd.next_birthday)::integer
+        WHERE bd.next_birthday = CURRENT_DATE + INTERVAL '3 days'
+        AND yt.id IS NULL`
 
-                // Проверяем дни рождения через 3 дня
-                query := `
-                        WITH birthday_dates AS (
-                                SELECT 
-                                        id,
-                                        birthday,
-                                        (CASE 
-                                                WHEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year')) < CURRENT_DATE
-                                                THEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday) + 1)::integer * INTERVAL '1 year'))
-                                                ELSE (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year'))
-                                        END) as next_birthday
-                                FROM team_members
-                        )
-                        SELECT 
-                                m.id
-                        FROM team_members m
-                        JOIN birthday_dates bd ON m.id = bd.id
-                        LEFT JOIN year_tasks yt ON 
-                                yt.team_member_id = m.id AND 
-                                yt.year = EXTRACT(YEAR FROM bd.next_birthday)::integer
-                        WHERE bd.next_birthday = CURRENT_DATE + INTERVAL '3 days'
-                        AND yt.id IS NULL`
+    rows, err := db.Query(query)
+    if err != nil {
+        return 0, fmt.Errorf("error checking upcoming birthdays: %v", err)
+    }
+    defer rows.Close()
 
-                rows, err := db.Query(query)
-                if err != nil {
-                        log.Printf("Error checking upcoming birthdays: %v", err)
-                        continue
-                }
-
-                currentYear := time.Now().Year()
-                for rows.Next() {
-                        var memberID int
-                        if err := rows.Scan(&memberID); err != nil {
-                                log.Printf("Error scanning member ID: %v", err)
-                                continue
-                        }
-
-                        // Создаем новую задачу для дня рождения
-                        _, err = db.Exec(`
-                                INSERT INTO year_tasks (year, team_member_id)
-                                VALUES ($1, $2)`,
-                                currentYear, memberID)
-                        if err != nil {
-                                log.Printf("Error creating year task for member %d: %v", memberID, err)
-                        }
-                }
-                rows.Close()
+    tasksCreated := 0
+    currentYear := time.Now().Year()
+    for rows.Next() {
+        var memberID int
+        if err := rows.Scan(&memberID); err != nil {
+            log.Printf("Error scanning member ID: %v", err)
+            continue
         }
+
+        // Создаем новую задачу для дня рождения
+        result, err := db.Exec(`
+            INSERT INTO year_tasks (year, team_member_id)
+            VALUES ($1, $2)`,
+            currentYear, memberID)
+        if err != nil {
+            log.Printf("Error creating year task: %v", err)
+            continue
+        }
+
+        rowsAffected, _ := result.RowsAffected()
+        tasksCreated += int(rowsAffected)
+    }
+
+    if err = rows.Err(); err != nil {
+        return tasksCreated, fmt.Errorf("error iterating over members: %v", err)
+    }
+
+    if tasksCreated == 0 {
+        return 0, fmt.Errorf("no new tasks created")
+    }
+
+    return tasksCreated, nil
+}
+
+func checkUpcomingBirthdays(db *sql.DB) {
+    for {
+        // Ждем до 00:01 по московскому времени
+        now := time.Now()
+        next := time.Date(now.Year(), now.Month(), now.Day(), 0, 1, 0, 0, time.Local)
+        if now.After(next) {
+            next = next.Add(24 * time.Hour)
+        }
+        time.Sleep(time.Until(next))
+
+        // Проверяем и создаем задачи
+        count, err := checkUpcomingBirthdaysOnce(db)
+        if err != nil && err.Error() != "no new tasks created" {
+            log.Printf("Error in scheduled birthday check: %v", err)
+        } else if count > 0 {
+            log.Printf("Created %d new birthday tasks", count)
+        }
+    }
 }
 
 func getTodaysBirthdays(db *sql.DB) ([]TeamMember, error) {
