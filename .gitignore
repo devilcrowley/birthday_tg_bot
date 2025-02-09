@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+birthday-bot
 
 # Test binary, built with `go test -c`
 *.test
