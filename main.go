@@ -759,15 +759,23 @@ func handleTeamSelection(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
 func checkUpcomingBirthdaysOnce(db *sql.DB) (int, error) {
     // Проверяем дни рождения через 3 дня
     query := `
-        SELECT
+        WITH date_range AS (
+            SELECT generate_series(
+                CURRENT_DATE,
+                CURRENT_DATE + INTERVAL '3 days',
+                INTERVAL '1 day'
+            ) as check_date
+        )
+        SELECT DISTINCT
             m.id
         FROM team_members m
+        CROSS JOIN date_range d
         LEFT JOIN year_tasks yt ON
             yt.team_member_id = m.id AND
-            yt.year = EXTRACT(YEAR FROM CURRENT_DATE + INTERVAL '3 days')::integer
+            yt.year = EXTRACT(YEAR FROM d.check_date)::integer
         WHERE 
-            EXTRACT(MONTH FROM m.birthday) = EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '3 days')
-            AND EXTRACT(DAY FROM m.birthday) = EXTRACT(DAY FROM CURRENT_DATE + INTERVAL '3 days')
+            EXTRACT(MONTH FROM m.birthday) = EXTRACT(MONTH FROM d.check_date)
+            AND EXTRACT(DAY FROM m.birthday) = EXTRACT(DAY FROM d.check_date)
             AND yt.id IS NULL`
 
     rows, err := db.Query(query)
