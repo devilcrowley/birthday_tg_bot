@@ -339,41 +339,211 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
     switch callback.Data {
     case "admin_gen_tasks":
         go func() {
+            count, err := checkUpcomingBirthdaysCount(db)
+            if err != nil {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке предстоящих дней рождения.")
+                bot.Send(msg)
+                return
+            }
+            if count == 0 {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых дней рождения для создания задач.")
+                bot.Send(msg)
+                return
+            }
             checkUpcomingBirthdays(db)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Задачи успешно созданы.")
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Задачи успешно созданы для %d предстоящих дней рождения.", count))
             bot.Send(msg)
         }()
     case "admin_gen_actions":
         go func() {
+            count, err := checkPendingActionsCount(db)
+            if err != nil {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке ожидающих действий.")
+                bot.Send(msg)
+                return
+            }
+            if count == 0 {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых задач для создания действий.")
+                bot.Send(msg)
+                return
+            }
             createRequestActions(db)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Действия успешно созданы.")
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Действия успешно созданы для %d задач.", count))
             bot.Send(msg)
         }()
     case "admin_send_members_messages":
         go func() {
+            count, err := checkPendingMemberNotificationsCount(db)
+            if err != nil {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке ожидающих уведомлений участников.")
+                bot.Send(msg)
+                return
+            }
+            if count == 0 {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых уведомлений для отправки участникам.")
+                bot.Send(msg)
+                return
+            }
             sendMemberNotifications(db, bot)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления участникам успешно отправлены.")
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Уведомления успешно отправлены %d участникам.", count))
             bot.Send(msg)
         }()
     case "admin_send_teamlead_notify":
         go func() {
+            count, err := checkPendingTeamLeadNotificationsCount(db)
+            if err != nil {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке ожидающих уведомлений тимлидов.")
+                bot.Send(msg)
+                return
+            }
+            if count == 0 {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых уведомлений для отправки тимлидам.")
+                bot.Send(msg)
+                return
+            }
             sendTeamLeadNotifications(db, bot)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Уведомления тимлидам успешно отправлены.")
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Уведомления успешно отправлены %d тимлидам.", count))
             bot.Send(msg)
         }()
     case "admin_send_today_birthday_messages":
         go func() {
+            count, err := checkTodayBirthdaysCount(db)
+            if err != nil {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке сегодняшних дней рождения.")
+                bot.Send(msg)
+                return
+            }
+            if count == 0 {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Сегодня нет дней рождения для отправки поздравлений.")
+                bot.Send(msg)
+                return
+            }
             sendBirthdayWishes(db, bot)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Поздравления с днем рождения успешно отправлены.")
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Поздравления успешно отправлены %d именинникам.", count))
             bot.Send(msg)
         }()
     case "admin_send_teamlead_money_message":
         go func() {
+            count, err := checkPendingPayoutRemindersCount(db)
+            if err != nil {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке ожидающих напоминаний о переводе денег.")
+                bot.Send(msg)
+                return
+            }
+            if count == 0 {
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых напоминаний о переводе денег для отправки.")
+                bot.Send(msg)
+                return
+            }
             sendPayoutReminders(db, bot)
-            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Напоминания о переводе денег успешно отправлены.")
+            msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Напоминания о переводе денег успешно отправлены %d тимлидам.", count))
             bot.Send(msg)
         }()
     }
+}
+
+// Функции проверки количества событий
+func checkUpcomingBirthdaysCount(db *sql.DB) (int, error) {
+    var count int
+    query := `
+        WITH birthday_dates AS (
+            SELECT 
+                id,
+                birthday,
+                (CASE 
+                    WHEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year')) < CURRENT_DATE
+                    THEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday) + 1)::integer * INTERVAL '1 year'))
+                    ELSE (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year'))
+                END) as next_birthday
+            FROM team_members
+        )
+        SELECT COUNT(*)
+        FROM team_members m
+        JOIN birthday_dates bd ON m.id = bd.id
+        LEFT JOIN year_tasks yt ON 
+            yt.team_member_id = m.id AND 
+            yt.year = EXTRACT(YEAR FROM bd.next_birthday)::integer
+        WHERE bd.next_birthday = CURRENT_DATE + INTERVAL '3 days'
+        AND yt.id IS NULL`
+
+    err := db.QueryRow(query).Scan(&count)
+    return count, err
+}
+
+func checkPendingActionsCount(db *sql.DB) (int, error) {
+    var count int
+    query := `
+        SELECT COUNT(*)
+        FROM year_tasks yt
+        LEFT JOIN actions a ON yt.id = a.task_id
+        WHERE a.id IS NULL
+        AND yt.is_members_notified = false`
+
+    err := db.QueryRow(query).Scan(&count)
+    return count, err
+}
+
+func checkPendingMemberNotificationsCount(db *sql.DB) (int, error) {
+    var count int
+    query := `
+        SELECT COUNT(*)
+        FROM year_tasks yt
+        WHERE yt.is_members_notified = false
+        AND EXISTS (
+            SELECT 1 FROM actions a
+            WHERE a.task_id = yt.id
+            AND a.type = 'request'
+            AND a.is_done = false
+        )`
+
+    err := db.QueryRow(query).Scan(&count)
+    return count, err
+}
+
+func checkPendingTeamLeadNotificationsCount(db *sql.DB) (int, error) {
+    var count int
+    query := `
+        SELECT COUNT(*)
+        FROM year_tasks yt
+        WHERE yt.is_teamlead_notified = false
+        AND EXISTS (
+            SELECT 1 FROM actions a
+            WHERE a.task_id = yt.id
+            AND a.type = 'request'
+            AND a.is_done = true
+        )`
+
+    err := db.QueryRow(query).Scan(&count)
+    return count, err
+}
+
+func checkTodayBirthdaysCount(db *sql.DB) (int, error) {
+    var count int
+    query := `
+        SELECT COUNT(*)
+        FROM team_members
+        WHERE EXTRACT(MONTH FROM birthday) = EXTRACT(MONTH FROM CURRENT_DATE)
+        AND EXTRACT(DAY FROM birthday) = EXTRACT(DAY FROM CURRENT_DATE)`
+
+    err := db.QueryRow(query).Scan(&count)
+    return count, err
+}
+
+func checkPendingPayoutRemindersCount(db *sql.DB) (int, error) {
+    var count int
+    query := `
+        SELECT COUNT(*)
+        FROM year_tasks yt
+        WHERE yt.is_money_transfered = false
+        AND EXISTS (
+            SELECT 1 FROM actions a
+            WHERE a.task_id = yt.id
+            AND a.type = 'payout'
+            AND a.is_done = false
+        )`
+
+    err := db.QueryRow(query).Scan(&count)
+    return count, err
 }
 
 func handleTeamSelection(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
