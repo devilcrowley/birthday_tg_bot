@@ -147,7 +147,7 @@ func logMessageToJournal(db *sql.DB, messageData map[string]interface{}, actionI
 }
 
 // Функция создания записи в журнале для уведомления участника
-func createMemberNotificationJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string, keyboard interface{}, 
+func createMemberNotificationJournal(db *sql.DB, sentMessage tgbotapi.Message, messageText string, keyboard interface{},
     birthdayName, teamName, teamleadName, teamleadPhone string, actionID int) error {
     messageJSON := map[string]interface{}{
         "message_id": sentMessage.MessageID,
@@ -168,7 +168,7 @@ func createMemberNotificationJournal(db *sql.DB, sentMessage *tgbotapi.Message, 
 }
 
 // Функция создания записи в журнале для уведомления тимлида
-func createTeamLeadNotificationJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string,
+func createTeamLeadNotificationJournal(db *sql.DB, sentMessage tgbotapi.Message, messageText string,
     birthdayName string, taskID int) error {
     messageJSON := map[string]interface{}{
         "message_id": sentMessage.MessageID,
@@ -184,7 +184,7 @@ func createTeamLeadNotificationJournal(db *sql.DB, sentMessage *tgbotapi.Message
 }
 
 // Функция создания записи в журнале для поздравления с днем рождения
-func createBirthdayWishJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string,
+func createBirthdayWishJournal(db *sql.DB, sentMessage tgbotapi.Message, messageText string,
     memberID int, name string, teamID int) error {
     messageJSON := map[string]interface{}{
         "message_id": sentMessage.MessageID,
@@ -201,7 +201,7 @@ func createBirthdayWishJournal(db *sql.DB, sentMessage *tgbotapi.Message, messag
 }
 
 // Функция создания записи в журнале для напоминания о переводе денег
-func createPayoutReminderJournal(db *sql.DB, sentMessage *tgbotapi.Message, messageText string, keyboard interface{},
+func createPayoutReminderJournal(db *sql.DB, sentMessage tgbotapi.Message, messageText string, keyboard interface{},
     birthdayPersonName, birthdayPersonPhone string, actionID int) error {
     messageJSON := map[string]interface{}{
         "message_id": sentMessage.MessageID,
