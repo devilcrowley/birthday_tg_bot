@@ -1532,29 +1532,7 @@ func sendNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
 }
 
 func sendMemberNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
-        query := `
-                WITH birthday_info AS (
-                        SELECT 
-                                yt.id as task_id,
-                                bm.name as birthday_person_name,
-                                t.name as team_name,
-                                tl.phone_number as teamlead_phone,
-                                tlm.name as teamlead_name
-                        FROM year_tasks yt
-                        JOIN team_members bm ON yt.team_member_id = bm.id
-                        JOIN teams t ON bm.team_id = t.id
-                        JOIN teamleads tl ON t.id = tl.team_id
-                        JOIN team_members tlm ON tl.team_member_id = tlm.id
-                        WHERE yt.is_members_notified = false
-                )
-                SELECT 
-                        a.id as action_id,
-                        bi.*,
-                        m.telegram_chat_id
-                FROM birthday_info bi
-                JOIN actions a ON a.task_id = bi.task_id
-                JOIN team_members m ON a.team_member_id = m.id
-                WHERE a.type = 'request' AND a.is_done = false`
+        query := `SELECT action_id, task_id, birthday_person_name, team_name, teamlead_phone, teamlead_name, telegram_chat_id FROM member_notifications`
 
         rows, err := db.Query(query)
         if err != nil {
@@ -1616,17 +1594,7 @@ func sendMemberNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
 }
 
 func sendTeamLeadNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
-        query := `
-                SELECT 
-                        yt.id as task_id,
-                        bm.name as birthday_person_name,
-                        tlm.telegram_chat_id
-                FROM year_tasks yt
-                JOIN team_members bm ON yt.team_member_id = bm.id
-                JOIN teams t ON bm.team_id = t.id
-                JOIN teamleads tl ON t.id = tl.team_id
-                JOIN team_members tlm ON tl.team_member_id = tlm.id
-                WHERE yt.is_teamlead_notified = false`
+        query := `SELECT task_id, birthday_person_name, telegram_chat_id, notified_teamlead_name FROM teamlead_notifications`
 
         rows, err := db.Query(query)
         if err != nil {
@@ -1637,20 +1605,21 @@ func sendTeamLeadNotifications(db *sql.DB, bot *tgbotapi.BotAPI) {
 
         for rows.Next() {
                 var (
-                        taskID         int
-                        birthdayName   string
-                        telegramChatID int64
+                        taskID              int
+                        birthdayName        string
+                        telegramChatID      int64
+                        notifiedTeamleadName string
                 )
 
-                err := rows.Scan(&taskID, &birthdayName, &telegramChatID)
+                err := rows.Scan(&taskID, &birthdayName, &telegramChatID, &notifiedTeamleadName)
                 if err != nil {
                         log.Printf("Error scanning teamlead notification data: %v", err)
                         continue
                 }
 
-                messageText := fmt.Sprintf("%s празднует день рождения через 3 дня! "+
+                messageText := fmt.Sprintf("Привет, %s! %s празднует день рождения через 3 дня! "+
                         "Сейчас тебе начнут поступать переводы ему на подарок! "+
-                        "Не забудь запланировать поздравление!", birthdayName)
+                        "Не забудь запланировать поздравление!", notifiedTeamleadName, birthdayName)
                 msg := tgbotapi.NewMessage(telegramChatID, messageText)
 
                 // Отправляем сообщение
