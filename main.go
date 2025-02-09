@@ -383,20 +383,36 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
         }()
     case "admin_gen_actions":
         go func() {
+            log.Printf("Starting to check pending actions")
             count, err := checkPendingActionsCount(db)
             if err != nil {
+                log.Printf("Error checking pending actions: %v", err)
                 msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при проверке ожидающих действий.")
                 bot.Send(msg)
                 return
             }
+            log.Printf("Found %d tasks without actions", count)
             if count == 0 {
                 msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых задач для создания действий.")
                 bot.Send(msg)
                 return
             }
-            createRequestActions(db)
+            log.Printf("Starting to create request actions")
+            err = createRequestActionsOnce(db)
+            if err != nil {
+                if err.Error() == "no new actions created" {
+                    msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Нет новых задач для создания действий.")
+                    bot.Send(msg)
+                } else {
+                    log.Printf("Error creating request actions: %v", err)
+                    msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при создании действий.")
+                    bot.Send(msg)
+                }
+                return
+            }
             msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Действия успешно созданы для %d задач.", count))
             bot.Send(msg)
+            log.Printf("Finished creating request actions")
         }()
     case "admin_send_members_messages":
         go func() {
@@ -1062,6 +1078,74 @@ func removeTeamLead(db *sql.DB, teamLeadID int) error {
         }
 
         return nil
+}
+
+func createRequestActionsOnce(db *sql.DB) error {
+    // Находим задачи без actions типа request
+    query := `
+        SELECT yt.id, yt.team_member_id
+        FROM year_tasks yt
+        LEFT JOIN actions a ON a.task_id = yt.id AND a.type = 'request'
+        WHERE a.id IS NULL`
+
+    rows, err := db.Query(query)
+    if err != nil {
+        return fmt.Errorf("error querying tasks without actions: %v", err)
+    }
+    defer rows.Close()
+
+    actionsCreated := 0
+    for rows.Next() {
+        var taskID, birthdayMemberID int
+        if err := rows.Scan(&taskID, &birthdayMemberID); err != nil {
+            log.Printf("Error scanning task: %v", err)
+            continue
+        }
+
+        // Получаем всех членов, кроме именинника
+        memberRows, err := db.Query(`
+            SELECT id
+            FROM team_members
+            WHERE id != $1`,
+            birthdayMemberID)
+        if err != nil {
+            log.Printf("Error getting team members: %v", err)
+            continue
+        }
+        defer memberRows.Close()
+
+        // Создаем actions для каждого члена команды
+        for memberRows.Next() {
+            var memberID int
+            if err := memberRows.Scan(&memberID); err != nil {
+                log.Printf("Error scanning member: %v", err)
+                continue
+            }
+
+            result, err := db.Exec(`
+                INSERT INTO actions (task_id, team_member_id, type)
+                VALUES ($1, $2, 'request')`,
+                taskID, memberID)
+            if err != nil {
+                log.Printf("Error creating action for member %d: %v", memberID, err)
+                continue
+            }
+
+            rowsAffected, _ := result.RowsAffected()
+            actionsCreated += int(rowsAffected)
+        }
+    }
+
+    if err = rows.Err(); err != nil {
+        return fmt.Errorf("error iterating over tasks: %v", err)
+    }
+
+    if actionsCreated == 0 {
+        return fmt.Errorf("no new actions created")
+    }
+
+    log.Printf("Successfully created %d new request actions", actionsCreated)
+    return nil
 }
 
 func createRequestActions(db *sql.DB) {
