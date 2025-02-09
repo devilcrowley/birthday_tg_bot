@@ -19,6 +19,21 @@ BEGIN
 END
 $$;
 
+
+-- Предоставляем базовые права на схему
+GRANT USAGE ON SCHEMA public TO birthdaybot;
+GRANT CREATE ON SCHEMA public TO birthdaybot;
+
+-- Устанавливаем права по умолчанию для будущих объектов
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO birthdaybot;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO birthdaybot;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT EXECUTE ON FUNCTIONS TO birthdaybot;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    GRANT USAGE ON TYPES TO birthdaybot;
+
 -- Устанавливаем схему public по умолчанию
 SET search_path TO public;
 
@@ -100,3 +115,30 @@ CREATE TRIGGER trigger_check_request_member
 BEFORE INSERT OR UPDATE ON actions
 FOR EACH ROW
 EXECUTE FUNCTION check_request_member();
+
+-- Создание таблицы администраторов (v1.1 compatible minimum)
+CREATE TABLE IF NOT EXISTS admins (
+    id SERIAL PRIMARY KEY,
+    telegram_chat_id BIGINT NOT NULL UNIQUE
+);
+
+-- Предоставление прав на новую таблицу
+GRANT ALL PRIVILEGES ON TABLE admins TO birthdaybot;
+GRANT ALL PRIVILEGES ON SEQUENCE admins_id_seq TO birthdaybot;
+
+-- Создание таблицы журнала сообщений (v1.2 compatible minimum)
+CREATE TABLE IF NOT EXISTS api_messages_journal (
+    id SERIAL PRIMARY KEY,
+    message JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    action_id INTEGER REFERENCES actions(id)
+);
+
+-- Предоставление прав на новую таблицу
+GRANT ALL PRIVILEGES ON TABLE api_messages_journal TO birthdaybot;
+GRANT ALL PRIVILEGES ON SEQUENCE api_messages_journal_id_seq TO birthdaybot;
+
+--Doublecheck по правам на таблицы (опционально)
+--GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO birthdaybot;
+--GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO birthdaybot;
