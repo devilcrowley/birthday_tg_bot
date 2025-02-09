@@ -525,29 +525,65 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
 
 // Функции проверки количества событий
 func checkUpcomingBirthdaysCount(db *sql.DB) (int, error) {
+    // Сначала выведем отладочную информацию
+    debugQuery := `
+        SELECT
+            m.id,
+            m.name,
+            m.birthday,
+            CURRENT_DATE as today,
+            CURRENT_DATE + INTERVAL '3 days' as max_date,
+            EXTRACT(MONTH FROM m.birthday) as birth_month,
+            EXTRACT(DAY FROM m.birthday) as birth_day
+        FROM team_members m
+        WHERE m.id IN (13, 14)`
+
+    debugRows, err := db.Query(debugQuery)
+    if err != nil {
+        log.Printf("Debug query error: %v", err)
+    } else {
+        defer debugRows.Close()
+        log.Printf("Debug information for users:")
+        for debugRows.Next() {
+            var (
+                id int
+                name string
+                birthday time.Time
+                today, maxDate time.Time
+                birthMonth, birthDay int
+            )
+            if err := debugRows.Scan(&id, &name, &birthday, &today, &maxDate, &birthMonth, &birthDay); err != nil {
+                log.Printf("Error scanning debug row: %v", err)
+                continue
+            }
+            log.Printf("ID: %d, Name: %s, Birthday: %v, Today: %v, MaxDate: %v, Birth Month/Day: %d/%d",
+                id, name, birthday, today, maxDate, birthMonth, birthDay)
+        }
+    }
+
+    // Теперь выполним основной запрос для подсчета
     var count int
     query := `
-        WITH birthday_dates AS (
-            SELECT 
-                id,
-                birthday,
-                (CASE 
-                    WHEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year')) < CURRENT_DATE
-                    THEN (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday) + 1)::integer * INTERVAL '1 year'))
-                    ELSE (birthday + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM birthday))::integer * INTERVAL '1 year'))
-                END) as next_birthday
-            FROM team_members
+        WITH date_range AS (
+            SELECT generate_series(
+                CURRENT_DATE,
+                CURRENT_DATE + INTERVAL '3 days',
+                INTERVAL '1 day'
+            )::date as check_date
         )
-        SELECT COUNT(*)
+        SELECT COUNT(DISTINCT m.id)
         FROM team_members m
-        JOIN birthday_dates bd ON m.id = bd.id
-        LEFT JOIN year_tasks yt ON 
-            yt.team_member_id = m.id AND 
-            yt.year = EXTRACT(YEAR FROM bd.next_birthday)::integer
-        WHERE bd.next_birthday = CURRENT_DATE + INTERVAL '3 days'
-        AND yt.id IS NULL`
+        CROSS JOIN date_range d
+        LEFT JOIN year_tasks yt ON
+            yt.team_member_id = m.id AND
+            yt.year = EXTRACT(YEAR FROM d.check_date)::integer
+        WHERE 
+            EXTRACT(MONTH FROM m.birthday) = EXTRACT(MONTH FROM d.check_date)
+            AND EXTRACT(DAY FROM m.birthday) = EXTRACT(DAY FROM d.check_date)
+            AND yt.id IS NULL`
 
-    err := db.QueryRow(query).Scan(&count)
+    err = db.QueryRow(query).Scan(&count)
+    log.Printf("Found %d birthdays in range without tasks", count)
     return count, err
 }
 
