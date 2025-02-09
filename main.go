@@ -439,7 +439,13 @@ func handleAdminCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Ca
                 return
             }
             log.Printf("Starting to send payout reminders")
-            sendPayoutReminders(db, bot)
+            err = sendPayoutRemindersOnce(db, bot)
+            if err != nil {
+                log.Printf("Error sending payout reminders: %v", err)
+                msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "Произошла ошибка при отправке напоминаний о переводе денег.")
+                bot.Send(msg)
+                return
+            }
             msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Напоминания о переводе денег успешно отправлены %d тимлидам.", count))
             bot.Send(msg)
             log.Printf("Finished sending payout reminders")
@@ -552,6 +558,69 @@ func checkPendingPayoutRemindersCount(db *sql.DB) (int, error) {
     }
     log.Printf("Found %d pending payout reminders", count)
     return count, nil
+}
+
+func sendPayoutRemindersOnce(db *sql.DB, bot *tgbotapi.BotAPI) error {
+    query := `
+        SELECT
+            a.id as action_id,
+            tl.telegram_chat_id as teamlead_chat_id,
+            bm.name as birthday_person_name,
+            bm.phone_number as birthday_person_phone,
+            yt.id as task_id
+        FROM actions a
+        JOIN year_tasks yt ON a.task_id = yt.id
+        JOIN team_members bm ON yt.team_member_id = bm.id
+        JOIN team_members tl ON a.team_member_id = tl.id
+        WHERE a.type = 'payout'
+        AND a.is_done = false
+        AND yt.is_money_transfered = false`
+
+    rows, err := db.Query(query)
+    if err != nil {
+        return fmt.Errorf("error querying payout reminders: %v", err)
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        var (
+            actionID           int
+            teamleadChatID     int64
+            birthdayPersonName string
+            birthdayPersonPhone string
+            taskID             int
+        )
+
+        err := rows.Scan(&actionID, &teamleadChatID, &birthdayPersonName, &birthdayPersonPhone, &taskID)
+        if err != nil {
+            log.Printf("Error scanning payout reminder data: %v", err)
+            continue
+        }
+
+        // Создаем сообщение с кнопкой
+        keyboard := tgbotapi.NewInlineKeyboardMarkup(
+            tgbotapi.NewInlineKeyboardRow(
+                tgbotapi.NewInlineKeyboardButtonData("Готово, перевел", fmt.Sprintf("payout_done_%d_%d", actionID, taskID)),
+            ),
+        )
+
+        messageText := fmt.Sprintf("Напоминание: необходимо перевести деньги %s (тел: %s)", 
+            birthdayPersonName, birthdayPersonPhone)
+        msg := tgbotapi.NewMessage(teamleadChatID, messageText)
+        msg.ReplyMarkup = keyboard
+
+        _, err = bot.Send(msg)
+        if err != nil {
+            log.Printf("Error sending payout reminder to teamlead %d: %v", teamleadChatID, err)
+            continue
+        }
+    }
+
+    if err = rows.Err(); err != nil {
+        return fmt.Errorf("error iterating over payout reminders: %v", err)
+    }
+
+    return nil
 }
 
 func handleTeamSelection(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery) {
