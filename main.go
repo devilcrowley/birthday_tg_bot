@@ -764,7 +764,59 @@ func checkUpcomingBirthdaysOnce(db *sql.DB) (int, error) {
                 CURRENT_DATE,
                 CURRENT_DATE + INTERVAL '3 days',
                 INTERVAL '1 day'
-            ) as check_date
+            )::date as check_date
+        )
+        SELECT DISTINCT
+            m.id,
+            m.name,
+            m.birthday,
+            d.check_date,
+            EXTRACT(MONTH FROM m.birthday) as birth_month,
+            EXTRACT(DAY FROM m.birthday) as birth_day,
+            EXTRACT(MONTH FROM d.check_date) as check_month,
+            EXTRACT(DAY FROM d.check_date) as check_day,
+            yt.id as task_id
+        FROM team_members m
+        CROSS JOIN date_range d
+        LEFT JOIN year_tasks yt ON
+            yt.team_member_id = m.id AND
+            yt.year = EXTRACT(YEAR FROM d.check_date)::integer
+        WHERE m.id IN (13, 14)  -- Временно добавим фильтр для отладки
+        ORDER BY m.id, d.check_date`
+
+    // Сначала выведем отладочную информацию
+    debugRows, err := db.Query(query)
+    if err != nil {
+        return 0, fmt.Errorf("error in debug query: %v", err)
+    }
+    defer debugRows.Close()
+
+    log.Printf("Debug information for birthday checks:")
+    for debugRows.Next() {
+        var (
+            id int
+            name string
+            birthday time.Time
+            checkDate time.Time
+            birthMonth, birthDay, checkMonth, checkDay int
+            taskID sql.NullInt64
+        )
+        if err := debugRows.Scan(&id, &name, &birthday, &checkDate, &birthMonth, &birthDay, &checkMonth, &checkDay, &taskID); err != nil {
+            log.Printf("Error scanning debug row: %v", err)
+            continue
+        }
+        log.Printf("ID: %d, Name: %s, Birthday: %v, Check Date: %v, Birth Month/Day: %d/%d, Check Month/Day: %d/%d, Task ID: %v",
+            id, name, birthday, checkDate, birthMonth, birthDay, checkMonth, checkDay, taskID.Int64)
+    }
+
+    // Теперь выполним основной запрос для создания задач
+    query = `
+        WITH date_range AS (
+            SELECT generate_series(
+                CURRENT_DATE,
+                CURRENT_DATE + INTERVAL '3 days',
+                INTERVAL '1 day'
+            )::date as check_date
         )
         SELECT DISTINCT
             m.id
